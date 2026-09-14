@@ -1,0 +1,15 @@
+# ESP-IDF build directory
+build/
+sdkconfig
+sdkconfig.old
+
+# IDE & Editores
+.vscode/
+.idea/
+*.swp
+*.bak
+
+# Binários e arquivos temporários
+*.bin
+*.elf
+*.map
