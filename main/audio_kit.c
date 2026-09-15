@@ -122,6 +122,28 @@ esp_err_t audio_kit_i2s_write(const void *src, size_t size, size_t *bytes_writte
     return i2s_channel_write(s_tx_handle, src, size, bytes_written, timeout_ms);
 }
 
+esp_err_t audio_kit_set_sample_rate(uint32_t sample_rate)
+{
+    if (!s_tx_handle) return ESP_ERR_INVALID_STATE;
+    static uint32_t s_current_rate = 0;
+    if (s_current_rate == sample_rate) return ESP_OK;
+
+    ESP_LOGI(TAG, "Reconfigurando taxa de amostragem I2S para %lu Hz...", (unsigned long)sample_rate);
+    i2s_std_clk_config_t clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(sample_rate);
+    esp_err_t ret = i2s_channel_disable(s_tx_handle);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Erro ao desabilitar I2S: %s", esp_err_to_name(ret));
+        return ret;
+    }
+    ret = i2s_channel_reconfig_std_clock(s_tx_handle, &clk_cfg);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Erro ao reconfigurar clock I2S: %s", esp_err_to_name(ret));
+    }
+    i2s_channel_enable(s_tx_handle);
+    s_current_rate = sample_rate;
+    return ret;
+}
+
 esp_err_t audio_kit_set_volume(uint8_t volume)
 {
     return es8388_set_voice_volume(volume);

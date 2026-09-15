@@ -9,11 +9,14 @@
 #include "freertos/task.h"
 #include "audio_kit.h"
 #include "wifi_manager.h"
+#include "web_radio.h"
 
 static const char *TAG = "WEB_RADIO_MAIN";
 
 #define SAMPLE_RATE_HZ      44100
 #define SINE_AMPLITUDE      12000 /* Amplitude alta e clara para fones P2 e alto-falantes */
+
+static TaskHandle_t s_audio_test_task_hdl = NULL;
 
 /**
  * @brief Gera um sinal senoidal estéreo com frequências independentes para cada canal
@@ -64,7 +67,7 @@ static void play_silence(uint32_t duration_ms)
 }
 
 /**
- * @brief Tarefa FreeRTOS contínua para teste da saída de áudio P2 (fone de ouvido)
+ * @brief Tarefa FreeRTOS inicial para teste da saída de áudio até o Wi-Fi conectar
  */
 static void audio_p2_test_task(void *pvParameters)
 {
@@ -99,6 +102,35 @@ static void serial_heartbeat_task(void *pvParameters)
     }
 }
 
+/**
+ * @brief Tarefa supervisora: aguarda conexao Wi-Fi e inicializa a reproducao da Web Radio
+ */
+static void radio_supervisor_task(void *pvParameters)
+{
+    ESP_LOGI(TAG, "Supervisor aguardando conexao Wi-Fi...");
+    while (!wifi_manager_is_connected()) {
+        vTaskDelay(pdMS_TO_TICKS(200));
+    }
+
+    ESP_LOGI(TAG, "==================================================");
+    ESP_LOGI(TAG, "  🌐 Wi-Fi Conectado! Iniciando Web Rádio Pública");
+    ESP_LOGI(TAG, "==================================================");
+
+    /* Encerra tarefa de teste de tons se ainda estiver ativa */
+    if (s_audio_test_task_hdl) {
+        vTaskDelete(s_audio_test_task_hdl);
+        s_audio_test_task_hdl = NULL;
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(100));
+
+    /* Inicializa e conecta ao stream da rádio pública */
+    web_radio_init();
+    web_radio_start(RADIO_DEFAULT_URL_BOSSA);
+
+    vTaskDelete(NULL);
+}
+
 void app_main(void)
 {
     ESP_LOGI(TAG, "==================================================");
@@ -131,12 +163,16 @@ void app_main(void)
 
     ESP_LOGI(TAG, "ESP32-Audio-Kit inicializado com sucesso.");
 
-    /* Configura volume alto e limpo para fones P2 e alto-falante (85%) */
-    audio_kit_set_volume(85);
+    /* Configura volume da placa para o maximo (100%) */
+    audio_kit_set_volume(100);
 
-    /* 5. Dispara a tarefa de áudio estéreo para a saída P2 */
-    xTaskCreatePinnedToCore(audio_p2_test_task, "audio_p2_test", 4096, NULL, 5, NULL, 1);
+    /* 5. Dispara a tarefa inicial de teste P2 (ativa ate o Wi-Fi conectar) */
+    xTaskCreatePinnedToCore(audio_p2_test_task, "audio_p2_test", 4096, NULL, 5, &s_audio_test_task_hdl, 1);
 
-    /* 6. Inicializa o Gerenciador Wi-Fi (SoftAP 10.10.10.1 ou Conexão Station) */
+    /* 6. Dispara o supervisor para comutar para a Web Radio quando o Wi-Fi conectar */
+    xTaskCreatePinnedToCore(radio_supervisor_task, "radio_sup", 4096, NULL, 4, NULL, 0);
+
+    /* 7. Inicializa o Gerenciador Wi-Fi (SoftAP 10.10.10.1 ou Conexão Station) */
     wifi_manager_init();
 }
+

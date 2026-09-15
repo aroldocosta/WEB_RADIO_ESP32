@@ -32,10 +32,10 @@ static uint8_t s_current_volume = 75;
 #define ES8388_DACCONTROL20     0x2A /* Roteamento Right DAC -> Right Mixer (0x90 = 0dB) */
 #define ES8388_DACCONTROL21     0x2B /* Habilitação de clocks internos (0x80 = DAC ON) */
 #define ES8388_DACCONTROL23     0x2D /* VROI = 0 */
-#define ES8388_DACCONTROL24     0x2E /* Volume LOUT1 / ROUT1 (Saída P2 / Fone): 0 = mute, 33 = 0dB */
-#define ES8388_DACCONTROL25     0x2F /* Volume LOUT2 / ROUT2 (Alto-falante PA): 0 = mute, 33 = 0dB */
-#define ES8388_DACCONTROL26     0x30
-#define ES8388_DACCONTROL27     0x31
+#define ES8388_DACCONTROL24     0x2E /* Volume LOUT1 (Fone P2 Canal Esquerdo: 0 = mudo, 33 = +4.5dB) */
+#define ES8388_DACCONTROL25     0x2F /* Volume ROUT1 (Fone P2 Canal Direito: 0 = mudo, 33 = +4.5dB) */
+#define ES8388_DACCONTROL26     0x30 /* Volume LOUT2 (Alto-falante PA Canal Esquerdo: 0 = mudo, 33 = +4.5dB) */
+#define ES8388_DACCONTROL27     0x31 /* Volume ROUT2 (Alto-falante PA Canal Direito: 0 = mudo, 33 = +4.5dB) */
 
 esp_err_t es8388_write_reg(uint8_t reg, uint8_t val)
 {
@@ -116,16 +116,16 @@ esp_err_t es8388_set_voice_volume(uint8_t volume)
     if (volume > 100) volume = 100;
     s_current_volume = volume;
 
-    // Converte escala 0..100 para o registrador do ES8388 (0 = mudo, 33 = 0dB ganho máximo)
+    // Converte escala 0..100 para o registrador do ES8388 (0 = mudo, 33 = +4.5dB ganho máximo analógico)
     uint8_t reg_val = (uint8_t)((volume * 33) / 100);
 
     esp_err_t ret = ESP_OK;
-    ret |= es8388_write_reg(ES8388_DACCONTROL24, reg_val); // LOUT1 / ROUT1 (Saída P2)
-    ret |= es8388_write_reg(ES8388_DACCONTROL25, reg_val); // LOUT2 / ROUT2 (Alto-falante)
-    ret |= es8388_write_reg(ES8388_DACCONTROL26, 0x00);
-    ret |= es8388_write_reg(ES8388_DACCONTROL27, 0x00);
+    ret |= es8388_write_reg(ES8388_DACCONTROL24, reg_val); // LOUT1 (Saída P2 / Fone Canal Esquerdo)
+    ret |= es8388_write_reg(ES8388_DACCONTROL25, reg_val); // ROUT1 (Saída P2 / Fone Canal Direito)
+    ret |= es8388_write_reg(ES8388_DACCONTROL26, reg_val); // LOUT2 (Alto-falante PA Canal Esquerdo)
+    ret |= es8388_write_reg(ES8388_DACCONTROL27, reg_val); // ROUT2 (Alto-falante PA Canal Direito)
 
-    ESP_LOGI(TAG, "Volume configurado para %d%% (reg 0x2E/0x2F: 0x%02X)", volume, reg_val);
+    ESP_LOGI(TAG, "Volume configurado para %d%% (regs 0x2E..0x31: 0x%02X)", volume, reg_val);
     return ret;
 }
 

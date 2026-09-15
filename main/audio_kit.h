@@ -65,6 +65,13 @@ esp_err_t audio_kit_init(uint32_t sample_rate);
 esp_err_t audio_kit_i2s_write(const void *src, size_t size, size_t *bytes_written, uint32_t timeout_ms);
 
 /**
+ * @brief Reconfigura dinamicamente a taxa de amostragem do barramento I2S
+ * @param sample_rate Nova frequencia de amostragem em Hz (ex: 44100, 48000, 32000)
+ * @return esp_err_t ESP_OK em caso de sucesso
+ */
+esp_err_t audio_kit_set_sample_rate(uint32_t sample_rate);
+
+/**
  * @brief Ajusta o volume geral da placa
  * @param volume Valor de volume entre 0 e 100
  * @return esp_err_t ESP_OK em caso de sucesso
