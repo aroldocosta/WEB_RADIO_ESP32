@@ -163,8 +163,8 @@ void app_main(void)
 
     ESP_LOGI(TAG, "ESP32-Audio-Kit inicializado com sucesso.");
 
-    /* Configura volume da placa para o maximo (100%) */
-    audio_kit_set_volume(100);
+    /* Configura volume da placa para 90% */
+    audio_kit_set_volume(90);
 
     /* 5. Dispara a tarefa inicial de teste P2 (ativa ate o Wi-Fi conectar) */
     xTaskCreatePinnedToCore(audio_p2_test_task, "audio_p2_test", 4096, NULL, 5, &s_audio_test_task_hdl, 1);
