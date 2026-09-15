@@ -192,11 +192,17 @@ static void http_stream_task(void *pvParameters)
             while (s_running) {
                 int read_len = esp_http_client_read(client, (char *)http_buf, HTTP_CHUNK_SIZE);
                 if (read_len > 0) {
-                    /* Envia bloco para o RingBuffer em PSRAM garantindo zero perda */
+                    /* Envia bloco para o RingBuffer em PSRAM respeitando o limite maximo continuo */
                     size_t sent = 0;
                     while (s_running && sent < (size_t)read_len) {
-                        size_t to_send = (size_t)read_len - sent;
-                        BaseType_t res = xRingbufferSend(s_ringbuf, http_buf + sent, to_send, pdMS_TO_TICKS(500));
+                        size_t remaining = (size_t)read_len - sent;
+                        size_t cur_free = xRingbufferGetCurFreeSize(s_ringbuf);
+                        if (cur_free == 0) {
+                            vTaskDelay(pdMS_TO_TICKS(15));
+                            continue;
+                        }
+                        size_t to_send = (remaining > cur_free) ? cur_free : remaining;
+                        BaseType_t res = xRingbufferSend(s_ringbuf, http_buf + sent, to_send, pdMS_TO_TICKS(200));
                         if (res == pdTRUE) {
                             s_buffered_bytes += to_send;
                             sent += to_send;
@@ -277,7 +283,7 @@ static void audio_decode_task(void *pvParameters)
         if (staging_len < 2048) {
             size_t needed = STAGING_BUF_SIZE - staging_len;
             size_t rx_size = 0;
-            void *data = xRingbufferReceiveUpTo(s_ringbuf, &rx_size, pdMS_TO_TICKS(100), needed);
+            void *data = xRingbufferReceiveUpTo(s_ringbuf, &rx_size, pdMS_TO_TICKS(50), needed);
             if (data && rx_size > 0) {
                 memcpy(staging_buf + staging_len, data, rx_size);
                 staging_len += rx_size;
@@ -288,9 +294,17 @@ static void audio_decode_task(void *pvParameters)
                     s_buffered_bytes = 0;
                 }
             } else if (staging_len == 0) {
-                /* Buffer totalmente esgotado (underrun) */
+                /* Buffer totalmente esgotado (underrun): silencia I2S e aguarda rebuffering */
                 s_is_playing = false;
-                vTaskDelay(pdMS_TO_TICKS(20));
+                int16_t silence[256 * 2] = {0};
+                size_t written = 0;
+                audio_kit_i2s_write(silence, sizeof(silence), &written, 50);
+
+                ESP_LOGW(TAG, "Buffer underrun! Aguardando rebuffering (32 KB)...");
+                while (s_running && s_buffered_bytes < (32 * 1024)) {
+                    vTaskDelay(pdMS_TO_TICKS(50));
+                }
+                ESP_LOGI(TAG, "Rebuffering concluido. Retomando reproducao.");
                 continue;
             }
         }

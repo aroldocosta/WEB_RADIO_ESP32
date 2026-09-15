@@ -63,6 +63,7 @@ esp_err_t audio_kit_init(uint32_t sample_rate)
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(AUDIO_KIT_I2S_PORT, I2S_ROLE_MASTER);
     chan_cfg.dma_desc_num = 6;
     chan_cfg.dma_frame_num = 240;
+    chan_cfg.auto_clear = true;
 
     ret = i2s_new_channel(&chan_cfg, &s_tx_handle, NULL);
     if (ret != ESP_OK) {
