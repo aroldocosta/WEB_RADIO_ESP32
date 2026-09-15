@@ -6,12 +6,25 @@ Um dispositivo autônomo de rádio via internet (Web Radio) baseado no microcont
 
 ## 🛠️ Requisitos de Hardware
 
-- **Microcontrolador**: ESP32 (Série WROVER ou S3) com **PSRAM externa obrigatória (mínimo 4MB)** e **Flash de 4MB**.
-- **Saída de Áudio**: DAC / Amplificador I2S (ex: MAX98357A ou PCM5102).
-- **Pinagem I2S Padrão**:
-  - `BCLK`: GPIO 26
-  - `LRCK / WS`: GPIO 25
-  - `DOUT / DATA`: GPIO 22
+- **Placa de Desenvolvimento**: **ESP32-Audio-Kit** equipada com módulo **Ai-Thinker ESP32-A1S**.
+- **Memória**: Flash SPI de **4MB** e **PSRAM integrada de 4MB/8MB** (habilitada no `sdkconfig.defaults`).
+- **Codec de Áudio Integrado**: **ES8388** (controle por I2C e áudio digital por I2S).
+- **Amplificador Onboard**: NS4150 (3W estéreo Classe D) com chave de habilitação (PA).
+- **Pinagem Integrada do Módulo ESP32-A1S**:
+  - **Barramento I2C (Controle do Codec)**:
+    - `SCL`: GPIO 32
+    - `SDA`: GPIO 33 (Endereço I2C `0x10`)
+  - **Barramento I2S (Áudio Digital PCM)**:
+    - `MCLK`: GPIO 0 *(Clock Mestre obrigatório para o codec)*
+    - `BCLK`: GPIO 27
+    - `LRCK / WS`: GPIO 25
+    - `DOUT` *(ESP32 -> DAC)*: GPIO 26
+    - `DIN` *(ADC/Mic -> ESP32)*: GPIO 35
+  - **Habilitação do Amplificador de Potência (PA)**:
+    - `PA Enable`: GPIO 21 *(nível lógico HIGH ativa os alto-falantes)*
+  - **Saídas de Áudio Disponíveis**:
+    - Conector P2 estéreo para Fone de Ouvido
+    - Bornes para conexão direta de até 2 alto-falantes de 3W (4Ω a 8Ω)
 
 ---
 
@@ -124,3 +137,10 @@ python -m esptool --chip esp32 -b 460800 --before default_reset --after hard_res
 
 - **Placa não entra em modo de gravação (`A fatal error occurred: Failed to connect to ESP32`)**:
   Mantenha pressionado o botão **BOOT** (ou **IO0**) na placa, dê um clique rápido no botão **EN** (ou **RESET**) e solte o botão BOOT assim que o esptool iniciar a conexão.
+
+- **Sem áudio no fone de ouvido P2 (Conector TRRS de 4 vias vs TRS de 3 vias)**:
+  O jack fêmea P2 da placa ESP32-Audio-Kit é estéreo padrão de **3 vias (TRS)**. Fones de celular modernos com microfone embutido possuem plugue de **4 vias (TRRS)**, o que frequentemente causa mau contato no terminal do terra (GND) e ausência de som. Utilize um fone/cabo convencional de **3 vias (TRS)** ou adaptador TRRS->TRS.
+
+- **Conector P2 correto (`PHONE` vs `LINE IN`)**:
+  A placa possui dois conectores P2 de 3.5mm lado a lado. Certifique-se de plugar no jack marcado como **`PHONE` / `HEADPHONE`**, e não no conector de entrada **`LINE IN`**.
+
