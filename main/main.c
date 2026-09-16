@@ -10,6 +10,7 @@
 #include "audio_kit.h"
 #include "wifi_manager.h"
 #include "web_radio.h"
+#include "radio_storage.h"
 
 static const char *TAG = "WEB_RADIO_MAIN";
 
@@ -66,27 +67,37 @@ static void play_silence(uint32_t duration_ms)
     play_tone(0, 0, duration_ms);
 }
 
+static volatile bool s_audio_test_running = true;
+
 /**
  * @brief Tarefa FreeRTOS inicial para teste da saída de áudio até o Wi-Fi conectar
  */
 static void audio_p2_test_task(void *pvParameters)
 {
-    while (1) {
+    while (s_audio_test_running && !wifi_manager_is_connected()) {
         /* 1. Canal Esquerdo (440 Hz - Nota Lá 4) */
         ESP_LOGI(TAG, "🔊 [P2 Teste] 1/3: Canal ESQUERDO (440 Hz)...");
         play_tone(440, 0, 700);
+        if (!s_audio_test_running || wifi_manager_is_connected()) break;
         play_silence(150);
 
         /* 2. Canal Direito (880 Hz - Nota Lá 5) */
+        if (!s_audio_test_running || wifi_manager_is_connected()) break;
         ESP_LOGI(TAG, "🔊 [P2 Teste] 2/3: Canal DIREITO (880 Hz)...");
         play_tone(0, 880, 700);
+        if (!s_audio_test_running || wifi_manager_is_connected()) break;
         play_silence(150);
 
         /* 3. Ambos os Canais - Acorde Estéreo (L: 554 Hz, R: 659 Hz) */
+        if (!s_audio_test_running || wifi_manager_is_connected()) break;
         ESP_LOGI(TAG, "🔊 [P2 Teste] 3/3: AMBOS OS CANAIS ESTÉREO (L: 554 Hz | R: 659 Hz)...");
         play_tone(554, 659, 1000);
         play_silence(1000);
     }
+
+    ESP_LOGI(TAG, "Tarefa de teste de tons encerrada com seguranca (driver I2S liberado).");
+    s_audio_test_task_hdl = NULL;
+    vTaskDelete(NULL);
 }
 
 /**
@@ -116,17 +127,24 @@ static void radio_supervisor_task(void *pvParameters)
     ESP_LOGI(TAG, "  🌐 Wi-Fi Conectado! Iniciando Web Rádio Pública");
     ESP_LOGI(TAG, "==================================================");
 
-    /* Encerra tarefa de teste de tons se ainda estiver ativa */
-    if (s_audio_test_task_hdl) {
-        vTaskDelete(s_audio_test_task_hdl);
-        s_audio_test_task_hdl = NULL;
+    /* Sinaliza encerramento da tarefa de teste e aguarda término limpo para não bloquear mutex do I2S */
+    s_audio_test_running = false;
+    while (s_audio_test_task_hdl != NULL) {
+        vTaskDelay(pdMS_TO_TICKS(50));
     }
 
     vTaskDelay(pdMS_TO_TICKS(100));
 
-    /* Inicializa e conecta ao stream da rádio pública */
+    /* Inicializa e conecta ao stream da rádio configurada */
     web_radio_init();
-    web_radio_start(RADIO_DEFAULT_URL_BOSSA);
+
+    radio_station_t initial_station;
+    if (radio_storage_get_by_index(0, &initial_station) == ESP_OK) {
+        ESP_LOGI(TAG, "Iniciando com primeira estacao salva: %s", initial_station.name);
+        web_radio_play(initial_station.name, initial_station.url);
+    } else {
+        web_radio_play("Bossa Nova Brazil", RADIO_DEFAULT_URL_BOSSA);
+    }
 
     vTaskDelete(NULL);
 }
@@ -144,6 +162,9 @@ void app_main(void)
         ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
+
+    /* Inicializa armazenamento persistente de rádios (com presets de fábrica na 1ª vez) */
+    radio_storage_init();
 
     /* 2. Dispara imediatamente a rotina serial de 1 segundo solicitada */
     xTaskCreatePinnedToCore(serial_heartbeat_task, "heartbeat_task", 2048, NULL, 1, NULL, 0);

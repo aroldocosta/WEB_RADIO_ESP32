@@ -31,10 +31,25 @@ esp_err_t web_radio_start(const char *stream_url);
  */
 esp_err_t web_radio_stop(void);
 
+typedef struct {
+    bool is_playing;
+    char current_name[64];
+    char current_url[256];
+    int sample_rate_hz;
+    int bitrate_kbps;
+    uint32_t buffer_bytes;
+    uint32_t frames_decoded;
+} web_radio_status_t;
+
 /**
- * @brief Retorna se a rádio está em execução / tocando
+ * @brief Inicia a reprodução definindo também o nome da estação
  */
-bool web_radio_is_playing(void);
+esp_err_t web_radio_play(const char *name, const char *stream_url);
+
+/**
+ * @brief Obtém o status em tempo real da reprodução e do buffer
+ */
+esp_err_t web_radio_get_status(web_radio_status_t *out_status);
 
 #ifdef __cplusplus
 }

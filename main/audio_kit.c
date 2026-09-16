@@ -10,6 +10,7 @@ static const char *TAG = "AUDIO_KIT";
 
 static i2s_chan_handle_t s_tx_handle = NULL;
 static bool s_pa_enabled = false;
+static uint32_t s_current_rate = 0;
 
 esp_err_t audio_kit_pa_enable(bool enable)
 {
@@ -61,8 +62,9 @@ esp_err_t audio_kit_init(uint32_t sample_rate)
     /* 3. Inicializar Barramento I2S com fornecimento de MCLK em GPIO 0 */
     ESP_LOGI(TAG, "Configurando canal I2S TX com MCLK em GPIO %d a %lu Hz...", AUDIO_KIT_I2S_MCLK_PIN, (unsigned long)sample_rate);
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(AUDIO_KIT_I2S_PORT, I2S_ROLE_MASTER);
-    chan_cfg.dma_desc_num = 6;
-    chan_cfg.dma_frame_num = 240;
+    /* 8 descritores de 512 frames = 4096 amostras (~92,8 ms de tolerância a jitter a 44,1 kHz) */
+    chan_cfg.dma_desc_num = 8;
+    chan_cfg.dma_frame_num = 512;
     chan_cfg.auto_clear = true;
 
     ret = i2s_new_channel(&chan_cfg, &s_tx_handle, NULL);
@@ -100,6 +102,8 @@ esp_err_t audio_kit_init(uint32_t sample_rate)
         return ret;
     }
 
+    s_current_rate = sample_rate;
+
     /* 4. Breve delay para estabilização do sinal MCLK antes de configurar o codec */
     vTaskDelay(pdMS_TO_TICKS(50));
 
@@ -126,10 +130,18 @@ esp_err_t audio_kit_i2s_write(const void *src, size_t size, size_t *bytes_writte
 esp_err_t audio_kit_set_sample_rate(uint32_t sample_rate)
 {
     if (!s_tx_handle) return ESP_ERR_INVALID_STATE;
-    static uint32_t s_current_rate = 0;
     if (s_current_rate == sample_rate) return ESP_OK;
 
-    ESP_LOGI(TAG, "Reconfigurando taxa de amostragem I2S para %lu Hz...", (unsigned long)sample_rate);
+    /* Filtra valores anômalos que não sejam taxas padrão de áudio */
+    if (sample_rate != 8000  && sample_rate != 11025 && sample_rate != 12000 &&
+        sample_rate != 16000 && sample_rate != 22050 && sample_rate != 24000 &&
+        sample_rate != 32000 && sample_rate != 44100 && sample_rate != 48000) {
+        ESP_LOGW(TAG, "Taxa de amostragem invalida rejeitada: %lu Hz", (unsigned long)sample_rate);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    ESP_LOGI(TAG, "Reconfigurando taxa de amostragem I2S de %lu Hz para %lu Hz...",
+             (unsigned long)s_current_rate, (unsigned long)sample_rate);
     i2s_std_clk_config_t clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(sample_rate);
     esp_err_t ret = i2s_channel_disable(s_tx_handle);
     if (ret != ESP_OK) {

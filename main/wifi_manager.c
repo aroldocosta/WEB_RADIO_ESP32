@@ -53,10 +53,17 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
         ESP_LOGI(TAG, "  🎉 CONECTADO À REDE WI-FI COM SUCESSO!");
         ESP_LOGI(TAG, "  Endereço IP Local: " IPSTR, IP2STR(&event->ip_info.ip));
         ESP_LOGI(TAG, "==================================================");
+        /* Desativa economia de energia do Wi-Fi para garantir menor latência no streaming de áudio */
+        esp_wifi_set_ps(WIFI_PS_NONE);
+        ESP_LOGI(TAG, "  ⚡ Wi-Fi Power Save DESATIVADO (WIFI_PS_NONE) para streaming contínuo");
         s_retry_num = 0;
         s_is_connected = true;
         s_current_state = WIFI_MGR_STATE_CONNECTED;
         xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
+
+        /* Inicia servidor Web para interface de player, sintonia e gerenciamento */
+        web_server_start();
+        ESP_LOGI(TAG, "  🌐 Interface Web disponível em: http://" IPSTR "/", IP2STR(&event->ip_info.ip));
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_AP_STACONNECTED) {
         wifi_event_ap_staconnected_t* event = (wifi_event_ap_staconnected_t*) event_data;
         ESP_LOGI(TAG, "Cliente conectou ao SoftAP (MAC: " MACSTR ")", MAC2STR(event->mac));

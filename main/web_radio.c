@@ -27,6 +27,36 @@ static bool s_running = false;
 static bool s_is_playing = false;
 static volatile size_t s_buffered_bytes = 0;
 static char s_current_url[384] = {0};
+static char s_current_name[64] = "Bossa Nova Brazil";
+static int s_active_hz = 44100;
+static int s_active_bitrate = 128;
+static uint32_t s_frames_decoded = 0;
+
+static inline void buffer_add_bytes(size_t bytes)
+{
+    __atomic_fetch_add(&s_buffered_bytes, bytes, __ATOMIC_SEQ_CST);
+}
+
+static inline void buffer_sub_bytes(size_t bytes)
+{
+    size_t cur = __atomic_load_n(&s_buffered_bytes, __ATOMIC_SEQ_CST);
+    while (cur > 0) {
+        size_t next = (cur >= bytes) ? (cur - bytes) : 0;
+        if (__atomic_compare_exchange_n(&s_buffered_bytes, &cur, next, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) {
+            break;
+        }
+    }
+}
+
+static inline size_t buffer_get_bytes(void)
+{
+    return __atomic_load_n(&s_buffered_bytes, __ATOMIC_SEQ_CST);
+}
+
+static inline void buffer_reset_bytes(void)
+{
+    __atomic_store_n(&s_buffered_bytes, 0, __ATOMIC_SEQ_CST);
+}
 
 static void http_stream_task(void *pvParameters);
 static void audio_decode_task(void *pvParameters);
@@ -51,9 +81,20 @@ esp_err_t web_radio_init(void)
         return ESP_ERR_NO_MEM;
     }
 
-    s_buffered_bytes = 0;
+    buffer_reset_bytes();
     ESP_LOGI(TAG, "RingBuffer de Web Radio inicializado com sucesso.");
     return ESP_OK;
+}
+
+esp_err_t web_radio_play(const char *name, const char *stream_url)
+{
+    if (name && strlen(name) > 0) {
+        strncpy(s_current_name, name, sizeof(s_current_name) - 1);
+        s_current_name[sizeof(s_current_name) - 1] = '\0';
+    } else {
+        strncpy(s_current_name, "Web Radio", sizeof(s_current_name) - 1);
+    }
+    return web_radio_start(stream_url);
 }
 
 esp_err_t web_radio_start(const char *stream_url)
@@ -75,7 +116,8 @@ esp_err_t web_radio_start(const char *stream_url)
 
     s_running = true;
     s_is_playing = false;
-    s_buffered_bytes = 0;
+    buffer_reset_bytes();
+    s_frames_decoded = 0;
 
     ESP_LOGI(TAG, "Iniciando Web Radio na URL: %s", s_current_url);
 
@@ -130,13 +172,29 @@ esp_err_t web_radio_stop(void)
         s_decode_task_hdl = NULL;
     }
 
-    s_buffered_bytes = 0;
+    buffer_reset_bytes();
+    s_frames_decoded = 0;
     return ESP_OK;
 }
 
 bool web_radio_is_playing(void)
 {
     return s_is_playing;
+}
+
+esp_err_t web_radio_get_status(web_radio_status_t *out_status)
+{
+    if (!out_status) return ESP_ERR_INVALID_ARG;
+    out_status->is_playing = s_is_playing;
+    strncpy(out_status->current_name, s_current_name, sizeof(out_status->current_name) - 1);
+    out_status->current_name[sizeof(out_status->current_name) - 1] = '\0';
+    strncpy(out_status->current_url, s_current_url, sizeof(out_status->current_url) - 1);
+    out_status->current_url[sizeof(out_status->current_url) - 1] = '\0';
+    out_status->sample_rate_hz = s_active_hz;
+    out_status->bitrate_kbps = s_active_bitrate;
+    out_status->buffer_bytes = (uint32_t)buffer_get_bytes();
+    out_status->frames_decoded = s_frames_decoded;
+    return ESP_OK;
 }
 
 /**
@@ -204,7 +262,7 @@ static void http_stream_task(void *pvParameters)
                         size_t to_send = (remaining > cur_free) ? cur_free : remaining;
                         BaseType_t res = xRingbufferSend(s_ringbuf, http_buf + sent, to_send, pdMS_TO_TICKS(200));
                         if (res == pdTRUE) {
-                            s_buffered_bytes += to_send;
+                            buffer_add_bytes(to_send);
                             sent += to_send;
                         } else {
                             vTaskDelay(pdMS_TO_TICKS(15));
@@ -215,7 +273,7 @@ static void http_stream_task(void *pvParameters)
                     if (total_bytes_streamed - last_log_bytes >= 64 * 1024) {
                         ESP_LOGI(TAG, "📥 Stream HTTP: %u KB recebidos | Buffer PSRAM: %u KB",
                                  (unsigned int)(total_bytes_streamed / 1024),
-                                 (unsigned int)(s_buffered_bytes / 1024));
+                                 (unsigned int)(buffer_get_bytes() / 1024));
                         last_log_bytes = total_bytes_streamed;
                     }
                 } else if (read_len == 0) {
@@ -267,12 +325,15 @@ static void audio_decode_task(void *pvParameters)
 
     size_t staging_len = 0;
     uint32_t frames_decoded = 0;
+    int s_candidate_hz = 44100;
+    int s_candidate_hz_count = 0;
 
     /* 1. Aguarda pré-buffering */
     ESP_LOGI(TAG, "Aguardando pre-buffering (%d KB)...", PREBUFFER_BYTES / 1024);
     while (s_running) {
-        if (s_buffered_bytes >= PREBUFFER_BYTES) {
-            ESP_LOGI(TAG, "Pre-buffering concluido (%u bytes em PSRAM)! Iniciando reproducao...", (unsigned int)s_buffered_bytes);
+        if (buffer_get_bytes() >= PREBUFFER_BYTES) {
+            ESP_LOGI(TAG, "Pre-buffering concluido (%u bytes em PSRAM)! Iniciando reproducao...",
+                     (unsigned int)buffer_get_bytes());
             break;
         }
         vTaskDelay(pdMS_TO_TICKS(50));
@@ -283,28 +344,25 @@ static void audio_decode_task(void *pvParameters)
         if (staging_len < 2048) {
             size_t needed = STAGING_BUF_SIZE - staging_len;
             size_t rx_size = 0;
-            void *data = xRingbufferReceiveUpTo(s_ringbuf, &rx_size, pdMS_TO_TICKS(50), needed);
+            void *data = xRingbufferReceiveUpTo(s_ringbuf, &rx_size, pdMS_TO_TICKS(40), needed);
             if (data && rx_size > 0) {
                 memcpy(staging_buf + staging_len, data, rx_size);
                 staging_len += rx_size;
                 vRingbufferReturnItem(s_ringbuf, data);
-                if (s_buffered_bytes >= rx_size) {
-                    s_buffered_bytes -= rx_size;
-                } else {
-                    s_buffered_bytes = 0;
-                }
-            } else if (staging_len == 0) {
-                /* Buffer totalmente esgotado (underrun): silencia I2S e aguarda rebuffering */
+                buffer_sub_bytes(rx_size);
+            } else if (staging_len < 450 && buffer_get_bytes() == 0) {
+                /* Underrun real: RingBuffer esgotado e menos de 1 quadro no staging */
                 s_is_playing = false;
                 int16_t silence[256 * 2] = {0};
                 size_t written = 0;
                 audio_kit_i2s_write(silence, sizeof(silence), &written, 50);
 
-                ESP_LOGW(TAG, "Buffer underrun! Aguardando rebuffering (32 KB)...");
-                while (s_running && s_buffered_bytes < (32 * 1024)) {
+                ESP_LOGW(TAG, "Buffer underrun detectado! Aguardando rebuffering (24 KB)...");
+                while (s_running && buffer_get_bytes() < (24 * 1024)) {
                     vTaskDelay(pdMS_TO_TICKS(50));
                 }
-                ESP_LOGI(TAG, "Rebuffering concluido. Retomando reproducao.");
+                ESP_LOGI(TAG, "Rebuffering concluido (%u bytes em PSRAM). Retomando reproducao.",
+                         (unsigned int)buffer_get_bytes());
                 continue;
             }
         }
@@ -320,9 +378,21 @@ static void audio_decode_task(void *pvParameters)
             staging_len -= consumed;
 
             if (samples > 0) {
-                /* Atualiza taxa de amostragem no codec e I2S se detectada */
-                if (info.hz > 0) {
-                    audio_kit_set_sample_rate(info.hz);
+                /* Filtro de estabilidade: exige consistência antes de reconfigurar o clock I2S */
+                if (info.hz > 0 && info.hz != s_active_hz) {
+                    if (info.hz == s_candidate_hz) {
+                        s_candidate_hz_count++;
+                        if (s_candidate_hz_count >= 10 || s_active_hz == 0) {
+                            audio_kit_set_sample_rate(info.hz);
+                            s_active_hz = info.hz;
+                            s_candidate_hz_count = 0;
+                        }
+                    } else {
+                        s_candidate_hz = info.hz;
+                        s_candidate_hz_count = 1;
+                    }
+                } else {
+                    s_candidate_hz_count = 0;
                 }
 
                 size_t written = 0;
@@ -338,13 +408,15 @@ static void audio_decode_task(void *pvParameters)
                 }
 
                 frames_decoded++;
+                s_frames_decoded = frames_decoded;
+                s_active_bitrate = info.bitrate_kbps;
                 s_is_playing = true;
 
                 if (frames_decoded % 150 == 1) {
                     ESP_LOGI(TAG, "📻 Tocando rádio: %d Hz | %d kbps | %s | Buffer: %u KB | Frames: %u",
                              info.hz, info.bitrate_kbps,
                              (info.channels == 2 ? "Estéreo" : "Mono"),
-                             (unsigned int)(s_buffered_bytes / 1024),
+                             (unsigned int)(buffer_get_bytes() / 1024),
                              (unsigned int)frames_decoded);
                 }
             }
