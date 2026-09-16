@@ -13,3 +13,6 @@ sdkconfig.old
 *.bin
 *.elf
 *.map
+
+# Component manager
+managed_components/
