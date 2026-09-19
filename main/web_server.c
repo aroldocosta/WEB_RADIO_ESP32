@@ -245,6 +245,22 @@ static esp_err_t api_stations_delete_handler(httpd_req_t *req)
         char id_str[16];
         if (httpd_query_key_value(query, "id", id_str, sizeof(id_str)) == ESP_OK) {
             int id = atoi(id_str);
+
+            /* Proteção UX: Impede exclusão da rádio que está em reprodução ativa */
+            radio_station_t target_st;
+            if (radio_storage_get_by_id(id, &target_st) == ESP_OK) {
+                web_radio_status_t status;
+                if (web_radio_get_status(&status) == ESP_OK) {
+                    if (status.is_playing && strcmp(target_st.url, status.current_url) == 0) {
+                        ESP_LOGW(TAG, "Exclusao bloqueada: radio '%s' esta em reproducao", target_st.name);
+                        httpd_resp_set_status(req, "409 Conflict");
+                        httpd_resp_set_type(req, "application/json");
+                        httpd_resp_send(req, "{\"error\":\"station_playing\",\"message\":\"Radio em reproducao nao pode ser excluida\"}", HTTPD_RESP_USE_STRLEN);
+                        return ESP_OK;
+                    }
+                }
+            }
+
             if (radio_storage_delete(id) == ESP_OK) {
                 httpd_resp_set_type(req, "application/json");
                 httpd_resp_send(req, "{\"status\":\"ok\"}", HTTPD_RESP_USE_STRLEN);

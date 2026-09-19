@@ -8,7 +8,7 @@
 static const char *TAG = "RADIO_STORAGE";
 
 #define NVS_NAMESPACE_RADIOS    "radio_store"
-#define NVS_KEY_STATIONS_JSON   "stations_json"
+#define NVS_KEY_STATIONS_JSON   "stations_v2"
 
 static radio_station_t s_stations[MAX_RADIO_STATIONS];
 static int s_station_count = 0;
@@ -16,11 +16,6 @@ static int s_next_id = 1;
 
 static const radio_station_t DEFAULT_STATIONS[] = {
     {1, "Rádio Aparecida FM 104.3 [AAC]", "https://aparecida.jmvstream.com/stream"},
-    {2, "Rádio Canção Nova [MP3]", "https://cloud1.cdnseguro.com:20038/stream"},
-    {3, "Rádio Dom Bosco 96.1 FM Fortaleza [AAC]", "https://radio.saopaulo01.com.br:10858/stream"},
-    {4, "Rádio Shalom Fortaleza [AAC]", "https://8006.radioideal.net/stream"},
-    {5, "Rádio Imaculada FM [MP3]", "https://radio.saopaulo01.com.br:10863/stream"},
-    {6, "Rádio Evangelizar [AAC]", "https://8239.brasilstream.com.br/stream"},
 };
 
 static esp_err_t save_to_nvs(void)
