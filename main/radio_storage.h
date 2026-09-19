@@ -62,6 +62,12 @@ cJSON* radio_storage_get_all_json(void);
  */
 esp_err_t radio_storage_replace_all(const cJSON *json_array);
 
+/**
+ * @brief Adiciona incrementalmente novas estações à lista existente (sem remover as já gravadas).
+ * @return Quantidade de novas rádios adicionadas.
+ */
+int radio_storage_add_batch(const cJSON *json_array);
+
 #ifdef __cplusplus
 }
 #endif

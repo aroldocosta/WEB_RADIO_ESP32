@@ -223,18 +223,15 @@ static esp_err_t api_stations_batch_post_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
-    esp_err_t err = radio_storage_replace_all(json);
+    int added = radio_storage_add_batch(json);
     cJSON_Delete(json);
 
-    if (err == ESP_OK) {
-        httpd_resp_set_type(req, "application/json");
-        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-        httpd_resp_send(req, "{\"status\":\"ok\"}", HTTPD_RESP_USE_STRLEN);
-        return ESP_OK;
-    } else {
-        httpd_resp_send_500(req);
-        return ESP_FAIL;
-    }
+    char resp[64];
+    snprintf(resp, sizeof(resp), "{\"status\":\"ok\",\"added\":%d}", added);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
 }
 
 /* Handler da API para Excluir Rádio (DELETE /api/stations?id=X) */

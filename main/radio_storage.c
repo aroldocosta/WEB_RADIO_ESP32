@@ -238,3 +238,56 @@ esp_err_t radio_storage_replace_all(const cJSON *json_array)
     return save_to_nvs();
 }
 
+int radio_storage_add_batch(const cJSON *json_array)
+{
+    if (!json_array || !cJSON_IsArray(json_array)) return 0;
+
+    int added_count = 0;
+    cJSON *item = NULL;
+    cJSON_ArrayForEach(item, json_array) {
+        if (s_station_count >= MAX_RADIO_STATIONS) {
+            ESP_LOGW(TAG, "Limite maximo de %d radios atingido!", MAX_RADIO_STATIONS);
+            break;
+        }
+
+        cJSON *name_obj = cJSON_GetObjectItem(item, "name");
+        cJSON *url_obj = cJSON_GetObjectItem(item, "url");
+
+        if (cJSON_IsString(name_obj) && cJSON_IsString(url_obj) &&
+            strlen(name_obj->valuestring) > 0 && strlen(url_obj->valuestring) > 0) {
+            
+            const char *new_url = url_obj->valuestring;
+            const char *new_name = name_obj->valuestring;
+
+            /* Evita duplicatas comparando URL e Nome */
+            bool already_exists = false;
+            for (int i = 0; i < s_station_count; i++) {
+                if (strcmp(s_stations[i].url, new_url) == 0 ||
+                    strcmp(s_stations[i].name, new_name) == 0) {
+                    already_exists = true;
+                    break;
+                }
+            }
+
+            if (!already_exists) {
+                s_stations[s_station_count].id = s_next_id++;
+                strncpy(s_stations[s_station_count].name, new_name, RADIO_NAME_MAX_LEN - 1);
+                s_stations[s_station_count].name[RADIO_NAME_MAX_LEN - 1] = '\0';
+                strncpy(s_stations[s_station_count].url, new_url, RADIO_URL_MAX_LEN - 1);
+                s_stations[s_station_count].url[RADIO_URL_MAX_LEN - 1] = '\0';
+                s_station_count++;
+                added_count++;
+                ESP_LOGI(TAG, "Nova radio incremental adicionada: '%s' (ID %d)", new_name, s_stations[s_station_count - 1].id);
+            }
+        }
+    }
+
+    if (added_count > 0) {
+        save_to_nvs();
+        ESP_LOGI(TAG, "%d novas radios gravadas na NVS (Total agora: %d).", added_count, s_station_count);
+    }
+
+    return added_count;
+}
+
+
