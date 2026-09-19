@@ -15,11 +15,12 @@ static int s_station_count = 0;
 static int s_next_id = 1;
 
 static const radio_station_t DEFAULT_STATIONS[] = {
-    {1, "Bossa Nova Brazil", "http://54.38.43.201:8009/stream-128kmp3-BossaNovaBrazil"},
-    {2, "SomaFM Groove Salad", "http://ice1.somafm.com/groovesalad-128-mp3"},
-    {3, "Radio Swiss Pop", "http://stream.srg-ssr.ch/srgssr/rsp/mp3/128"},
-    {4, "SomaFM Secret Agent", "http://ice1.somafm.com/secretagent-128-mp3"},
-    {5, "Máquina do Tempo MPB", "http://servidor28.brlogic.com:8032/live"},
+    {1, "Rádio Aparecida FM 104.3 [AAC]", "https://aparecida.jmvstream.com/stream"},
+    {2, "Rádio Canção Nova [MP3]", "https://cloud1.cdnseguro.com:20038/stream"},
+    {3, "Rádio Dom Bosco 96.1 FM Fortaleza [AAC]", "https://radio.saopaulo01.com.br:10858/stream"},
+    {4, "Rádio Shalom Fortaleza [AAC]", "https://8006.radioideal.net/stream"},
+    {5, "Rádio Imaculada FM [MP3]", "https://radio.saopaulo01.com.br:10863/stream"},
+    {6, "Rádio Evangelizar [AAC]", "https://8239.brasilstream.com.br/stream"},
 };
 
 static esp_err_t save_to_nvs(void)
@@ -211,3 +212,34 @@ cJSON* radio_storage_get_all_json(void)
     }
     return root;
 }
+
+esp_err_t radio_storage_replace_all(const cJSON *json_array)
+{
+    if (!json_array || !cJSON_IsArray(json_array)) return ESP_ERR_INVALID_ARG;
+
+    s_station_count = 0;
+    s_next_id = 1;
+
+    cJSON *item = NULL;
+    cJSON_ArrayForEach(item, json_array) {
+        if (s_station_count >= MAX_RADIO_STATIONS) break;
+
+        cJSON *name_obj = cJSON_GetObjectItem(item, "name");
+        cJSON *url_obj = cJSON_GetObjectItem(item, "url");
+
+        if (cJSON_IsString(name_obj) && cJSON_IsString(url_obj) &&
+            strlen(name_obj->valuestring) > 0 && strlen(url_obj->valuestring) > 0) {
+            
+            s_stations[s_station_count].id = s_next_id++;
+            strncpy(s_stations[s_station_count].name, name_obj->valuestring, RADIO_NAME_MAX_LEN - 1);
+            s_stations[s_station_count].name[RADIO_NAME_MAX_LEN - 1] = '\0';
+            strncpy(s_stations[s_station_count].url, url_obj->valuestring, RADIO_URL_MAX_LEN - 1);
+            s_stations[s_station_count].url[RADIO_URL_MAX_LEN - 1] = '\0';
+            s_station_count++;
+        }
+    }
+
+    ESP_LOGI(TAG, "Substituicao em lote concluida: %d radios gravadas na NVS.", s_station_count);
+    return save_to_nvs();
+}
+

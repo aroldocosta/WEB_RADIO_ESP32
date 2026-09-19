@@ -57,6 +57,11 @@ esp_err_t radio_storage_delete(int id);
  */
 cJSON* radio_storage_get_all_json(void);
 
+/**
+ * @brief Substitui atomicamente a lista de rádios salvas na NVS pelo array fornecido.
+ */
+esp_err_t radio_storage_replace_all(const cJSON *json_array);
+
 #ifdef __cplusplus
 }
 #endif

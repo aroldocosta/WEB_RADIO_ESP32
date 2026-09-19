@@ -187,6 +187,56 @@ static esp_err_t api_stations_post_handler(httpd_req_t *req)
     return ESP_FAIL;
 }
 
+/* Handler da API para Gravação em Lote das Rádios Escolhidas (POST /api/stations/batch) */
+static esp_err_t api_stations_batch_post_handler(httpd_req_t *req)
+{
+    int total_len = req->content_len;
+    if (total_len <= 0 || total_len > 8192) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Tamanho de payload invalido");
+        return ESP_FAIL;
+    }
+
+    char *buf = malloc(total_len + 1);
+    if (!buf) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    int received = 0;
+    while (received < total_len) {
+        int ret = httpd_req_recv(req, buf + received, total_len - received);
+        if (ret <= 0) {
+            free(buf);
+            httpd_resp_send_500(req);
+            return ESP_FAIL;
+        }
+        received += ret;
+    }
+    buf[received] = '\0';
+
+    cJSON *json = cJSON_Parse(buf);
+    free(buf);
+
+    if (!json || !cJSON_IsArray(json)) {
+        if (json) cJSON_Delete(json);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Esperado array JSON de radios");
+        return ESP_FAIL;
+    }
+
+    esp_err_t err = radio_storage_replace_all(json);
+    cJSON_Delete(json);
+
+    if (err == ESP_OK) {
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"status\":\"ok\"}", HTTPD_RESP_USE_STRLEN);
+        return ESP_OK;
+    } else {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+}
+
 /* Handler da API para Excluir Rádio (DELETE /api/stations?id=X) */
 static esp_err_t api_stations_delete_handler(httpd_req_t *req)
 {
@@ -301,6 +351,7 @@ static esp_err_t api_status_handler(httpd_req_t *req)
     cJSON_AddBoolToObject(root, "playing", status.is_playing);
     cJSON_AddStringToObject(root, "name", status.current_name);
     cJSON_AddStringToObject(root, "url", status.current_url);
+    cJSON_AddStringToObject(root, "codec", status.codec);
     cJSON_AddNumberToObject(root, "hz", status.sample_rate_hz);
     cJSON_AddNumberToObject(root, "bitrate", status.bitrate_kbps);
     cJSON_AddNumberToObject(root, "buffer", status.buffer_bytes);
@@ -389,6 +440,13 @@ esp_err_t web_server_start(void)
         .handler = api_stations_post_handler,
     };
     httpd_register_uri_handler(s_server, &stations_post_uri);
+
+    httpd_uri_t stations_batch_post_uri = {
+        .uri = "/api/stations/batch",
+        .method = HTTP_POST,
+        .handler = api_stations_batch_post_handler,
+    };
+    httpd_register_uri_handler(s_server, &stations_batch_post_uri);
 
     httpd_uri_t stations_del_uri = {
         .uri = "/api/stations",

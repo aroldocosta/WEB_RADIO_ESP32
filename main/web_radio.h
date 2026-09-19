@@ -35,6 +35,7 @@ typedef struct {
     bool is_playing;
     char current_name[64];
     char current_url[256];
+    char codec[8];
     int sample_rate_hz;
     int bitrate_kbps;
     uint32_t buffer_bytes;

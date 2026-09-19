@@ -11,6 +11,7 @@
 #include "wifi_manager.h"
 #include "web_radio.h"
 #include "radio_storage.h"
+#include "mqtt_client_app.h"
 
 static const char *TAG = "WEB_RADIO_MAIN";
 
@@ -143,8 +144,11 @@ static void radio_supervisor_task(void *pvParameters)
         ESP_LOGI(TAG, "Iniciando com primeira estacao salva: %s", initial_station.name);
         web_radio_play(initial_station.name, initial_station.url);
     } else {
-        web_radio_play("Bossa Nova Brazil", RADIO_DEFAULT_URL_BOSSA);
+        web_radio_play("Rádio Aparecida FM", "https://aparecida.jmvstream.com/stream");
     }
+
+    /* Conecta ao broker MQTT para notificacoes de catalogo */
+    mqtt_client_app_init();
 
     vTaskDelete(NULL);
 }
