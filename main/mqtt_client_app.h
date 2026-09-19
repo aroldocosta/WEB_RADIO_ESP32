@@ -9,7 +9,7 @@ extern "C" {
 #endif
 
 /**
- * @brief Inicializa e conecta ao broker MQTT (mqtt.oficinabr.com) com credenciais
+ * @brief Inicializa e conecta ao broker MQTT (oficinabr.com:1883) com credenciais
  * @return esp_err_t ESP_OK em caso de sucesso
  */
 esp_err_t mqtt_client_app_init(void);

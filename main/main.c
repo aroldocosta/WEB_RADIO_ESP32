@@ -150,6 +150,9 @@ static void radio_supervisor_task(void *pvParameters) {
 
   vTaskDelay(pdMS_TO_TICKS(100));
 
+  /* Conecta ao broker MQTT para notificacoes de catalogo */
+  mqtt_client_app_init();
+
   /* Inicializa e conecta ao stream da rádio configurada */
   web_radio_init();
 
@@ -162,9 +165,6 @@ static void radio_supervisor_task(void *pvParameters) {
     web_radio_play("Rádio Aparecida FM",
                    "https://aparecida.jmvstream.com/stream");
   }
-
-  /* Conecta ao broker MQTT para notificacoes de catalogo */
-  mqtt_client_app_init();
 
   vTaskDelete(NULL);
 }
