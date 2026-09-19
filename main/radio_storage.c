@@ -17,7 +17,7 @@ static int s_next_id = 1;
 static const radio_station_t DEFAULT_STATIONS[] = {
     {1, "Bossa Nova Brazil", "http://54.38.43.201:8009/stream-128kmp3-BossaNovaBrazil"},
     {2, "SomaFM Groove Salad", "http://ice1.somafm.com/groovesalad-128-mp3"},
-    {3, "Radio Swiss Pop", "http://stream.srg-ssr.ch/m/rsp/mp3_128"},
+    {3, "Radio Swiss Pop", "http://stream.srg-ssr.ch/srgssr/rsp/mp3/128"},
     {4, "SomaFM Secret Agent", "http://ice1.somafm.com/secretagent-128-mp3"},
     {5, "Máquina do Tempo MPB", "http://servidor28.brlogic.com:8032/live"},
 };

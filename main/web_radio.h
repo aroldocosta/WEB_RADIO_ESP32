@@ -51,6 +51,11 @@ esp_err_t web_radio_play(const char *name, const char *stream_url);
  */
 esp_err_t web_radio_get_status(web_radio_status_t *out_status);
 
+/**
+ * @brief Verifica se a rádio está tocando no momento
+ */
+bool web_radio_is_playing(void);
+
 #ifdef __cplusplus
 }
 #endif

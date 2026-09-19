@@ -29,6 +29,7 @@ static void restart_task(void *pvParameters)
 static esp_err_t root_get_handler(httpd_req_t *req)
 {
     httpd_resp_set_type(req, "text/html; charset=utf-8");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
     if (wifi_manager_is_connected()) {
         httpd_resp_send(req, RADIO_PAGE_HTML, HTTPD_RESP_USE_STRLEN);
     } else {
@@ -41,6 +42,7 @@ static esp_err_t root_get_handler(httpd_req_t *req)
 static esp_err_t wifi_get_handler(httpd_req_t *req)
 {
     httpd_resp_set_type(req, "text/html; charset=utf-8");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
     httpd_resp_send(req, SETUP_PAGE_HTML, HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
 }
