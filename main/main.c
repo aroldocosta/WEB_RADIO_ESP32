@@ -119,13 +119,13 @@ static void audio_p2_test_task(void *pvParameters) {
  *        Envia a mensagem solicitada com os milissegundos decorridos desde o
  * boot
  */
-static void serial_heartbeat_task(void *pvParameters) {
-  while (1) {
-    int64_t millis = esp_timer_get_time() / 1000;
-    printf("Estou funcionando a  %lld milisengundos\n", (long long)millis);
-    vTaskDelay(pdMS_TO_TICKS(1000));
-  }
-}
+// static void serial_heartbeat_task(void *pvParameters) {
+//   while (1) {
+//     int64_t millis = esp_timer_get_time() / 1000;
+//     printf("Estou funcionando a  %lld milisengundos\n", (long long)millis);
+//     vTaskDelay(pdMS_TO_TICKS(1000));
+//   }
+// }
 
 /**
  * @brief Tarefa supervisora: aguarda conexao Wi-Fi e inicializa a reproducao da
@@ -188,8 +188,9 @@ void app_main(void) {
   radio_storage_init();
 
   /* 2. Dispara imediatamente a rotina serial de 1 segundo solicitada */
-  xTaskCreatePinnedToCore(serial_heartbeat_task, "heartbeat_task", 2048, NULL,
-                          1, NULL, 0);
+  // xTaskCreatePinnedToCore(serial_heartbeat_task, "heartbeat_task", 2048,
+  // NULL,
+  //                         1, NULL, 0);
 
   /* 3. Diagnóstico de Memória */
   size_t free_sram = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
