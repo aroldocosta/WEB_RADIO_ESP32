@@ -111,13 +111,32 @@ esp_err_t es8388_config_fmt(es8388_format_t fmt, es8388_bits_t bits)
     return es8388_write_reg(ES8388_DACCONTROL1, reg);
 }
 
+/*
+ * Tabela de Mapeamento Perceptual (Audio Taper LUT):
+ * Mapeia a escala linear do slider (0..100%) para os 33 passos do registrador ES8388
+ * compensando a resposta logarítmica do ouvido humano para uma sensação auditiva linear.
+ */
+static const uint8_t s_volume_lut[101] = {
+     0,  4,  6,  7,  8,  9,  9, 10, 11, 11,
+    12, 12, 13, 13, 14, 14, 14, 15, 15, 16,
+    16, 16, 17, 17, 17, 18, 18, 18, 19, 19,
+    19, 19, 20, 20, 20, 21, 21, 21, 21, 22,
+    22, 22, 22, 23, 23, 23, 23, 23, 24, 24,
+    24, 24, 25, 25, 25, 25, 25, 26, 26, 26,
+    26, 26, 27, 27, 27, 27, 27, 28, 28, 28,
+    28, 28, 28, 29, 29, 29, 29, 29, 30, 30,
+    30, 30, 30, 30, 31, 31, 31, 31, 31, 31,
+    31, 32, 32, 32, 32, 32, 32, 33, 33, 33,
+    33
+};
+
 esp_err_t es8388_set_voice_volume(uint8_t volume)
 {
     if (volume > 100) volume = 100;
     s_current_volume = volume;
 
-    // Converte escala 0..100 para o registrador do ES8388 (0 = mudo, 33 = +4.5dB ganho máximo analógico)
-    uint8_t reg_val = (uint8_t)((volume * 33) / 100);
+    // Obtém o valor calibrado perceptual do registrador (0 = mudo, 33 = +4.5dB)
+    uint8_t reg_val = s_volume_lut[volume];
 
     esp_err_t ret = ESP_OK;
     ret |= es8388_write_reg(ES8388_DACCONTROL24, reg_val); // LOUT1 (Saída P2 / Fone Canal Esquerdo)
@@ -125,7 +144,7 @@ esp_err_t es8388_set_voice_volume(uint8_t volume)
     ret |= es8388_write_reg(ES8388_DACCONTROL26, reg_val); // LOUT2 (Alto-falante PA Canal Esquerdo)
     ret |= es8388_write_reg(ES8388_DACCONTROL27, reg_val); // ROUT2 (Alto-falante PA Canal Direito)
 
-    ESP_LOGI(TAG, "Volume configurado para %d%% (regs 0x2E..0x31: 0x%02X)", volume, reg_val);
+    ESP_LOGI(TAG, "Volume configurado para %d%% (LUT reg: 0x%02X)", volume, reg_val);
     return ret;
 }
 
