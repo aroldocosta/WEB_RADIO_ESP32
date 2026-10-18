@@ -1,25 +1,25 @@
 #ifndef WIFI_MANAGER_H
 #define WIFI_MANAGER_H
 
+#include "esp_err.h"
 #include <stdbool.h>
 #include <stddef.h>
-#include "esp_err.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#define WIFI_AP_SSID            "WebRadio-Setup"
-#define WIFI_AP_IP_STR          "10.10.10.1"
-#define WIFI_AP_GW_STR          "10.10.10.1"
-#define WIFI_AP_NETMASK_STR     "255.255.255.0"
-#define WIFI_HOSTNAME           "benditasois"
+#define WIFI_AP_SSID "WebRadio-Setup"
+#define WIFI_AP_IP_STR "10.10.10.1"
+#define WIFI_AP_GW_STR "10.10.10.1"
+#define WIFI_AP_NETMASK_STR "255.255.255.0"
+#define WIFI_HOSTNAME "radio"
 
 typedef enum {
-    WIFI_MGR_STATE_IDLE = 0,
-    WIFI_MGR_STATE_CONNECTING,
-    WIFI_MGR_STATE_CONNECTED,
-    WIFI_MGR_STATE_AP_MODE,
+  WIFI_MGR_STATE_IDLE = 0,
+  WIFI_MGR_STATE_CONNECTING,
+  WIFI_MGR_STATE_CONNECTED,
+  WIFI_MGR_STATE_AP_MODE,
 } wifi_mgr_state_t;
 
 /**
@@ -38,15 +38,18 @@ esp_err_t wifi_manager_save_credentials(const char *ssid, const char *password);
 /**
  * @brief Lê as credenciais armazenadas na NVS
  */
-esp_err_t wifi_manager_get_credentials(char *ssid, size_t ssid_len, char *password, size_t password_len);
+esp_err_t wifi_manager_get_credentials(char *ssid, size_t ssid_len,
+                                       char *password, size_t password_len);
 
 /**
- * @brief Apaga as credenciais da NVS (forçando o modo de configuração no próximo boot)
+ * @brief Apaga as credenciais da NVS (forçando o modo de configuração no
+ * próximo boot)
  */
 esp_err_t wifi_manager_clear_credentials(void);
 
 /**
- * @brief Inicia o modo Ponto de Acesso (SoftAP) no IP 10.10.10.1 com Portal Cativo
+ * @brief Inicia o modo Ponto de Acesso (SoftAP) no IP 10.10.10.1 com Portal
+ * Cativo
  */
 esp_err_t wifi_manager_start_ap(void);
 
@@ -56,7 +59,8 @@ esp_err_t wifi_manager_start_ap(void);
 wifi_mgr_state_t wifi_manager_get_state(void);
 
 /**
- * @brief Retorna true se estiver conectado a uma rede Wi-Fi Station com IP atribuído
+ * @brief Retorna true se estiver conectado a uma rede Wi-Fi Station com IP
+ * atribuído
  */
 bool wifi_manager_is_connected(void);
 
