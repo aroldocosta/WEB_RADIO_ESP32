@@ -13,6 +13,7 @@ extern "C" {
 #define WIFI_AP_IP_STR          "10.10.10.1"
 #define WIFI_AP_GW_STR          "10.10.10.1"
 #define WIFI_AP_NETMASK_STR     "255.255.255.0"
+#define WIFI_HOSTNAME           "benditasois"
 
 typedef enum {
     WIFI_MGR_STATE_IDLE = 0,

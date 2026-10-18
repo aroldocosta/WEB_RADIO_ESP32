@@ -66,16 +66,16 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
         web_server_start();
         ESP_LOGI(TAG, "  🌐 Interface Web disponível em: http://" IPSTR "/", IP2STR(&event->ip_info.ip));
 
-        /* Inicializa mDNS responder para http://webradio.local/ */
+        /* Inicializa mDNS responder para http://benditasois.local/ */
         static bool s_mdns_started = false;
         if (!s_mdns_started) {
             esp_err_t mdns_err = mdns_init();
             if (mdns_err == ESP_OK) {
-                mdns_hostname_set("webradio");
+                mdns_hostname_set(WIFI_HOSTNAME);
                 mdns_instance_name_set("ESP32 Web Radio");
                 mdns_service_add("ESP32-WebRadio", "_http", "_tcp", 80, NULL, 0);
                 s_mdns_started = true;
-                ESP_LOGI(TAG, "  🏷️  mDNS ATIVO! Acesse via: http://webradio.local/");
+                ESP_LOGI(TAG, "  🏷️  mDNS ATIVO! Acesse via: http://" WIFI_HOSTNAME ".local/");
             } else {
                 ESP_LOGW(TAG, "  Falha ao inicializar mDNS: %s", esp_err_to_name(mdns_err));
             }
@@ -154,7 +154,7 @@ esp_err_t wifi_manager_start_ap(void)
 
     if (!s_ap_netif) {
         s_ap_netif = esp_netif_create_default_wifi_ap();
-        esp_netif_set_hostname(s_ap_netif, "webradio");
+        esp_netif_set_hostname(s_ap_netif, WIFI_HOSTNAME);
     }
 
     /* Configurar IP estático do SoftAP para 10.10.10.1 */
@@ -207,7 +207,7 @@ esp_err_t wifi_manager_init(void)
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
     s_sta_netif = esp_netif_create_default_wifi_sta();
-    esp_netif_set_hostname(s_sta_netif, "webradio");
+    esp_netif_set_hostname(s_sta_netif, WIFI_HOSTNAME);
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
