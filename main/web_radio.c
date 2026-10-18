@@ -14,12 +14,17 @@
 #define MINIMP3_IMPLEMENTATION
 #include "minimp3.h"
 
+#include "esp_crt_bundle.h"
+#include "aacdec.h"
+
 static const char *TAG = "WEB_RADIO";
 
 #define RING_BUF_SIZE       (256 * 1024)   /* 256 KB em PSRAM (~16 segundos de buffer a 128 kbps) */
-#define PREBUFFER_BYTES     (32 * 1024)    /* 32 KB (~2 segundos) antes de iniciar reproducao */
-#define STAGING_BUF_SIZE    (4096)
-#define HTTP_CHUNK_SIZE     (2048)
+#define PREBUFFER_BYTES     (64 * 1024)    /* 64 KB (~4 segundos a 128 kbps) para estabilidade total sem picotes */
+#define REBUFFER_BYTES      (32 * 1024)    /* 32 KB para recuperacao consistente em caso de underrun */
+#define STAGING_BUF_SIZE    (8192)
+#define AAC_MAX_OUT_SAMPS   (8192)         /* 8192 amostras (16 KB) para folga total com SBR estéreo/mono */
+#define HTTP_CHUNK_SIZE     (4096)         /* Leitura em blocos de 4 KB */
 
 static RingbufHandle_t s_ringbuf = NULL;
 static SemaphoreHandle_t s_radio_mutex = NULL;
@@ -39,6 +44,7 @@ static char s_current_name[64] = "Bossa Nova Brazil";
 static int s_active_hz = 44100;
 static int s_active_bitrate = 128;
 static uint32_t s_frames_decoded = 0;
+static volatile bool s_is_aac_stream = false;
 
 static inline void buffer_add_bytes(size_t bytes)
 {
@@ -129,10 +135,10 @@ esp_err_t web_radio_init(void)
             return ESP_FAIL;
         }
 
-        /* Tarefa de streaming HTTP no Core 0 com 10 KB de stack */
+        /* Tarefa de streaming HTTP no Core 0 com 16 KB de stack para negociacao TLS segura */
         ret = xTaskCreatePinnedToCore(http_stream_task,
                                      "radio_http",
-                                     10240,
+                                     16384,
                                      NULL,
                                      4,
                                      &s_http_task_hdl,
@@ -175,14 +181,22 @@ esp_err_t web_radio_play(const char *name, const char *stream_url)
     s_stream_requested = true;
     s_frames_decoded = 0;
 
+    /* Pré-seleciona codec pelo rótulo do nome [AAC]/[MP3] ou URL */
+    if (name && strcasestr(name, "[AAC]")) {
+        s_is_aac_stream = true;
+    } else if (name && strcasestr(name, "[MP3]")) {
+        s_is_aac_stream = false;
+    } else if (stream_url && (strcasestr(stream_url, ".aac") || strcasestr(stream_url, "aacp") || strcasestr(stream_url, "jmvstream"))) {
+        s_is_aac_stream = true;
+    } else if (stream_url && (strcasestr(stream_url, ".mp3") || strcasestr(stream_url, "mp3"))) {
+        s_is_aac_stream = false;
+    } else {
+        s_is_aac_stream = false;
+    }
+
     if (s_radio_mutex) xSemaphoreGive(s_radio_mutex);
 
     ESP_LOGI(TAG, "Sintonizando nova estacao: '%s' (%s)", s_current_name, s_current_url);
-
-    /* Se houver cliente HTTP ativo na conexao anterior, cancela requisicao para destravar leitura imediatamente */
-    if (s_http_client) {
-        esp_http_client_cancel_request(s_http_client);
-    }
 
     return ESP_OK;
 }
@@ -202,10 +216,6 @@ esp_err_t web_radio_stop(void)
     s_decode_reset = true;
     s_is_playing = false;
     if (s_radio_mutex) xSemaphoreGive(s_radio_mutex);
-
-    if (s_http_client) {
-        esp_http_client_cancel_request(s_http_client);
-    }
 
     return ESP_OK;
 }
@@ -231,6 +241,33 @@ esp_err_t web_radio_get_status(web_radio_status_t *out_status)
     out_status->bitrate_kbps = s_active_bitrate;
     out_status->buffer_bytes = (uint32_t)buffer_get_bytes();
     out_status->frames_decoded = s_frames_decoded;
+    strncpy(out_status->codec, s_is_aac_stream ? "AAC" : "MP3", sizeof(out_status->codec) - 1);
+    out_status->codec[sizeof(out_status->codec) - 1] = '\0';
+    return ESP_OK;
+}
+
+/**
+ * @brief Event handler HTTP para captura assíncrona de cabeçalhos de resposta (Content-Type)
+ */
+static esp_err_t _http_event_handler(esp_http_client_event_t *evt)
+{
+    switch (evt->event_id) {
+        case HTTP_EVENT_ON_HEADER:
+            if (evt->header_key && strcasecmp(evt->header_key, "Content-Type") == 0) {
+                if (evt->header_value) {
+                    ESP_LOGI(TAG, "📡 Content-Type recebido do servidor: %s", evt->header_value);
+                    if (strcasestr(evt->header_value, "aac") != NULL) {
+                        s_is_aac_stream = true;
+                    } else if (strcasestr(evt->header_value, "mpeg") != NULL ||
+                               strcasestr(evt->header_value, "mp3") != NULL) {
+                        s_is_aac_stream = false;
+                    }
+                }
+            }
+            break;
+        default:
+            break;
+    }
     return ESP_OK;
 }
 
@@ -268,13 +305,15 @@ static void http_stream_task(void *pvParameters)
 
         esp_http_client_config_t config = {
             .url = url,
-            .timeout_ms = 8000,
+            .event_handler = _http_event_handler,
+            .timeout_ms = 3000,
             .buffer_size = 4096,
             .buffer_size_tx = 1024,
             .keep_alive_enable = false,
             .disable_auto_redirect = false,
             .max_redirection_count = 4,
             .user_agent = "ESP32-Audio-Kit/1.0",
+            .crt_bundle_attach = esp_crt_bundle_attach,
         };
 
         esp_http_client_handle_t client = esp_http_client_init(&config);
@@ -302,6 +341,14 @@ static void http_stream_task(void *pvParameters)
             int64_t content_len = esp_http_client_fetch_headers(client);
             int status_code = esp_http_client_get_status_code(client);
             ESP_LOGI(TAG, "Conexao HTTP estabelecida! Status: %d (Len: %lld)", status_code, (long long)content_len);
+
+            /* Inspeciona URL como fallback se Content-Type ainda nao tiver definido AAC */
+            if (!s_is_aac_stream) {
+                if (strcasestr(url, ".aac") || strcasestr(url, "aacp") || strcasestr(url, "jmvstream")) {
+                    s_is_aac_stream = true;
+                }
+            }
+            ESP_LOGI(TAG, "Decodificador selecionado para este stream: %s", s_is_aac_stream ? "Helix AAC / AAC+" : "minimp3");
 
             /* Trata redirecionamentos 301, 302, 307, 308 */
             if (status_code == 301 || status_code == 302 || status_code == 307 || status_code == 308) {
@@ -388,15 +435,19 @@ static void http_stream_task(void *pvParameters)
 static void audio_decode_task(void *pvParameters)
 {
     mp3dec_t *mp3d = (mp3dec_t *)calloc(1, sizeof(mp3dec_t));
+    HAACDecoder hAac = AACInitDecoder();
     uint8_t *staging_buf = (uint8_t *)malloc(STAGING_BUF_SIZE);
     mp3d_sample_t *pcm = (mp3d_sample_t *)malloc(MINIMP3_MAX_SAMPLES_PER_FRAME * sizeof(mp3d_sample_t));
-    int16_t *stereo_pcm = (int16_t *)malloc(MINIMP3_MAX_SAMPLES_PER_FRAME * 2 * sizeof(int16_t));
+    short *aac_pcm = (short *)malloc(AAC_MAX_OUT_SAMPS * sizeof(short));
+    int16_t *stereo_pcm = (int16_t *)malloc(AAC_MAX_OUT_SAMPS * sizeof(int16_t));
 
-    if (!mp3d || !staging_buf || !pcm || !stereo_pcm) {
+    if (!mp3d || !hAac || !staging_buf || !pcm || !aac_pcm || !stereo_pcm) {
         ESP_LOGE(TAG, "Sem memoria para buffers de decodificacao de audio!");
         if (mp3d) free(mp3d);
+        if (hAac) AACFreeDecoder(hAac);
         if (staging_buf) free(staging_buf);
         if (pcm) free(pcm);
+        if (aac_pcm) free(aac_pcm);
         if (stereo_pcm) free(stereo_pcm);
         vTaskDelete(NULL);
         return;
@@ -426,12 +477,16 @@ static void audio_decode_task(void *pvParameters)
             staging_len = 0;
             ringbuf_flush();
             mp3dec_init(mp3d);
+            if (hAac) {
+                AACFreeDecoder(hAac);
+                hAac = AACInitDecoder();
+            }
             needs_prebuffer = true;
             frames_decoded = 0;
             s_decode_reset = false;
         }
 
-        /* 1. Fase de Pré-buffering (apenas ao iniciar nova estacao ou apos underrun) */
+        /* 1. Fase de Pré-buffering */
         if (needs_prebuffer) {
             s_is_playing = false;
             staging_len = 0;
@@ -444,8 +499,8 @@ static void audio_decode_task(void *pvParameters)
 
             if (!s_stream_requested || s_decode_reset) continue;
 
-            ESP_LOGI(TAG, "Pre-buffering concluido (%u bytes em PSRAM)! Iniciando reproducao...",
-                     (unsigned int)buffer_get_bytes());
+            ESP_LOGI(TAG, "Pre-buffering concluido (%u bytes em PSRAM)! Iniciando reproducao (%s)...",
+                     (unsigned int)buffer_get_bytes(), s_is_aac_stream ? "AAC" : "MP3");
             needs_prebuffer = false;
         }
 
@@ -460,14 +515,14 @@ static void audio_decode_task(void *pvParameters)
                 vRingbufferReturnItem(s_ringbuf, data);
                 buffer_sub_bytes(rx_size);
             } else if (staging_len < 450 && buffer_get_bytes() == 0) {
-                /* Underrun real: RingBuffer esgotado e menos de 1 quadro no staging */
+                /* Underrun real: RingBuffer esgotado */
                 s_is_playing = false;
                 int16_t silence[256 * 2] = {0};
                 size_t written = 0;
                 audio_kit_i2s_write(silence, sizeof(silence), &written, 50);
 
-                ESP_LOGW(TAG, "Buffer underrun detectado! Aguardando rebuffering (16 KB)...");
-                while (s_stream_requested && !s_decode_reset && buffer_get_bytes() < (16 * 1024)) {
+                ESP_LOGW(TAG, "Buffer underrun detectado! Aguardando rebuffering (%d KB)...", REBUFFER_BYTES / 1024);
+                while (s_stream_requested && !s_decode_reset && buffer_get_bytes() < REBUFFER_BYTES) {
                     vTaskDelay(pdMS_TO_TICKS(40));
                 }
                 if (!s_stream_requested || s_decode_reset) continue;
@@ -478,77 +533,183 @@ static void audio_decode_task(void *pvParameters)
             }
         }
 
-        /* 3. Decodifica um quadro MP3 */
-        mp3dec_frame_info_t info;
-        int samples = mp3dec_decode_frame(mp3d, staging_buf, (int)staging_len, pcm, &info);
+        /* 3. Decodificação de Áudio (AAC/AAC+ ou MP3) */
+        if (s_is_aac_stream) {
+            int syncOffset = AACFindSyncWord(staging_buf, (int)staging_len);
+            if (syncOffset > 0) {
+                memmove(staging_buf, staging_buf + syncOffset, staging_len - syncOffset);
+                staging_len -= syncOffset;
+            } else if (syncOffset < 0) {
+                if (staging_len >= 1024) {
+                    memmove(staging_buf, staging_buf + 512, staging_len - 512);
+                    staging_len -= 512;
+                } else {
+                    vTaskDelay(pdMS_TO_TICKS(10));
+                }
+                continue;
+            }
 
-        if (info.frame_bytes > 0) {
-            size_t consumed = (size_t)info.frame_bytes;
-            if (consumed > staging_len) consumed = staging_len;
-            memmove(staging_buf, staging_buf + consumed, staging_len - consumed);
-            staging_len -= consumed;
+            unsigned char *inPtr = staging_buf;
+            int bytesLeft = (int)staging_len;
+            int err = AACDecode(hAac, &inPtr, &bytesLeft, aac_pcm);
 
-            if (samples > 0) {
-                /* Filtro de estabilidade para reconfigurar o clock I2S quando necessario */
-                if (info.hz > 0 && info.hz != s_active_hz) {
-                    if (info.hz == s_candidate_hz) {
-                        s_candidate_hz_count++;
-                        if (s_candidate_hz_count >= 10 || s_active_hz == 0) {
-                            audio_kit_set_sample_rate(info.hz);
-                            s_active_hz = info.hz;
-                            s_candidate_hz_count = 0;
+            if (err == ERR_AAC_NONE) {
+                AACFrameInfo aacInfo;
+                AACGetLastFrameInfo(hAac, &aacInfo);
+
+                size_t consumed = staging_len - (size_t)bytesLeft;
+                if (consumed > staging_len) consumed = staging_len;
+                memmove(staging_buf, staging_buf + consumed, staging_len - consumed);
+                staging_len -= consumed;
+
+                if (aacInfo.outputSamps > 0) {
+                    if (aacInfo.sampRateOut > 0 && aacInfo.sampRateOut != s_active_hz) {
+                        if (aacInfo.sampRateOut == s_candidate_hz) {
+                            s_candidate_hz_count++;
+                            if (s_candidate_hz_count >= 5 || s_active_hz == 0) {
+                                audio_kit_set_sample_rate(aacInfo.sampRateOut);
+                                s_active_hz = aacInfo.sampRateOut;
+                                s_candidate_hz_count = 0;
+                            }
+                        } else {
+                            s_candidate_hz = aacInfo.sampRateOut;
+                            s_candidate_hz_count = 1;
                         }
                     } else {
-                        s_candidate_hz = info.hz;
-                        s_candidate_hz_count = 1;
+                        s_candidate_hz_count = 0;
                     }
+
+                    size_t written = 0;
+                    if (aacInfo.nChans == 2) {
+                        audio_kit_i2s_write(aac_pcm, aacInfo.outputSamps * sizeof(int16_t), &written, pdMS_TO_TICKS(100));
+                    } else if (aacInfo.nChans == 1) {
+                        for (int i = 0; i < aacInfo.outputSamps; i++) {
+                            stereo_pcm[i * 2]     = aac_pcm[i];
+                            stereo_pcm[i * 2 + 1] = aac_pcm[i];
+                        }
+                        audio_kit_i2s_write(stereo_pcm, aacInfo.outputSamps * 2 * sizeof(int16_t), &written, pdMS_TO_TICKS(100));
+                    }
+
+                    frames_decoded++;
+                    s_frames_decoded = frames_decoded;
+                    s_active_bitrate = (aacInfo.bitRate > 0) ? (aacInfo.bitRate / 1000) : 128;
+                    s_is_playing = true;
+
+                    if (frames_decoded % 200 == 1) {
+                        ESP_LOGI(TAG, "📻 Tocando AAC+: %s | %d Hz | %d kbps | %s | Buffer: %u KB | Frames: %u",
+                                 s_current_name,
+                                 aacInfo.sampRateOut, s_active_bitrate,
+                                 (aacInfo.nChans == 2 ? "Estéreo" : "Mono"),
+                                 (unsigned int)(buffer_get_bytes() / 1024),
+                                 (unsigned int)frames_decoded);
+                    }
+                }
+                vTaskDelay(pdMS_TO_TICKS(1));
+            } else {
+                static int s_aac_err_count = 0;
+                s_aac_err_count++;
+                if (s_aac_err_count % 100 == 1) {
+                    ESP_LOGW(TAG, "AACDecode aviso/erro: %d | staging: %u", err, (unsigned int)staging_len);
+                }
+
+                int nextSync = AACFindSyncWord(staging_buf + 1, (int)staging_len - 1);
+                if (nextSync >= 0) {
+                    size_t advance = nextSync + 1;
+                    memmove(staging_buf, staging_buf + advance, staging_len - advance);
+                    staging_len -= advance;
                 } else {
-                    s_candidate_hz_count = 0;
+                    size_t drop = (staging_len > 512) ? 512 : staging_len;
+                    memmove(staging_buf, staging_buf + drop, staging_len - drop);
+                    staging_len -= drop;
                 }
-
-                size_t written = 0;
-                if (info.channels == 2) {
-                    audio_kit_i2s_write(pcm, samples * 2 * sizeof(int16_t), &written, pdMS_TO_TICKS(100));
-                } else if (info.channels == 1) {
-                    /* Converte mono para estéreo intercalado */
-                    for (int i = 0; i < samples; i++) {
-                        stereo_pcm[i * 2]     = pcm[i];
-                        stereo_pcm[i * 2 + 1] = pcm[i];
-                    }
-                    audio_kit_i2s_write(stereo_pcm, samples * 2 * sizeof(int16_t), &written, pdMS_TO_TICKS(100));
-                }
-
-                frames_decoded++;
-                s_frames_decoded = frames_decoded;
-                s_active_bitrate = info.bitrate_kbps;
-                s_is_playing = true;
-
-                if (frames_decoded % 200 == 1) {
-                    ESP_LOGI(TAG, "📻 Tocando: %s | %d Hz | %d kbps | %s | Buffer: %u KB | Frames: %u",
-                             s_current_name,
-                             info.hz, info.bitrate_kbps,
-                             (info.channels == 2 ? "Estéreo" : "Mono"),
-                             (unsigned int)(buffer_get_bytes() / 1024),
-                             (unsigned int)frames_decoded);
-                }
+                vTaskDelay(pdMS_TO_TICKS(2));
             }
         } else {
-            /* Avança buffer se sincronização de quadro ainda não foi encontrada */
-            if (info.frame_offset > 0 && info.frame_offset < (int)staging_len) {
-                memmove(staging_buf, staging_buf + info.frame_offset, staging_len - info.frame_offset);
-                staging_len -= info.frame_offset;
-            } else if (staging_len >= 2048) {
-                memmove(staging_buf, staging_buf + 1, staging_len - 1);
-                staging_len--;
+            /* Decodifica um quadro MP3 */
+            mp3dec_frame_info_t info;
+            int samples = mp3dec_decode_frame(mp3d, staging_buf, (int)staging_len, pcm, &info);
+
+            if (info.frame_bytes > 0) {
+                size_t consumed = (size_t)info.frame_bytes;
+                if (consumed > staging_len) consumed = staging_len;
+                memmove(staging_buf, staging_buf + consumed, staging_len - consumed);
+                staging_len -= consumed;
+
+                if (samples > 0) {
+                    if (info.hz > 0 && info.hz != s_active_hz) {
+                        if (info.hz == s_candidate_hz) {
+                            s_candidate_hz_count++;
+                            if (s_candidate_hz_count >= 10 || s_active_hz == 0) {
+                                audio_kit_set_sample_rate(info.hz);
+                                s_active_hz = info.hz;
+                                s_candidate_hz_count = 0;
+                            }
+                        } else {
+                            s_candidate_hz = info.hz;
+                            s_candidate_hz_count = 1;
+                        }
+                    } else {
+                        s_candidate_hz_count = 0;
+                    }
+
+                    size_t written = 0;
+                    if (info.channels == 2) {
+                        audio_kit_i2s_write(pcm, samples * 2 * sizeof(int16_t), &written, pdMS_TO_TICKS(100));
+                    } else if (info.channels == 1) {
+                        for (int i = 0; i < samples; i++) {
+                            stereo_pcm[i * 2]     = pcm[i];
+                            stereo_pcm[i * 2 + 1] = pcm[i];
+                        }
+                        audio_kit_i2s_write(stereo_pcm, samples * 2 * sizeof(int16_t), &written, pdMS_TO_TICKS(100));
+                    }
+
+                    frames_decoded++;
+                    s_frames_decoded = frames_decoded;
+                    s_active_bitrate = info.bitrate_kbps;
+                    s_is_playing = true;
+
+                    if (frames_decoded % 200 == 1) {
+                        ESP_LOGI(TAG, "📻 Tocando MP3: %s | %d Hz | %d kbps | %s | Buffer: %u KB | Frames: %u",
+                                 s_current_name,
+                                 info.hz, info.bitrate_kbps,
+                                 (info.channels == 2 ? "Estéreo" : "Mono"),
+                                 (unsigned int)(buffer_get_bytes() / 1024),
+                                 (unsigned int)frames_decoded);
+                    }
+                }
+                vTaskDelay(pdMS_TO_TICKS(1));
             } else {
-                vTaskDelay(pdMS_TO_TICKS(10));
+                /* Avança buffer se sincronização de quadro ainda não foi encontrada */
+                static int s_mp3_sync_fail_count = 0;
+                s_mp3_sync_fail_count++;
+                if (s_mp3_sync_fail_count > 25 && staging_len >= 16) {
+                    int aacSync = AACFindSyncWord(staging_buf, (int)staging_len);
+                    if (aacSync >= 0) {
+                        ESP_LOGW(TAG, "Falhas consecutivas em MP3, mas syncword AAC detectado! Chaveando para AAC...");
+                        s_is_aac_stream = true;
+                        s_mp3_sync_fail_count = 0;
+                        continue;
+                    }
+                }
+
+                if (info.frame_offset > 0 && info.frame_offset < (int)staging_len) {
+                    memmove(staging_buf, staging_buf + info.frame_offset, staging_len - info.frame_offset);
+                    staging_len -= info.frame_offset;
+                } else if (staging_len >= 2048) {
+                    memmove(staging_buf, staging_buf + 1, staging_len - 1);
+                    staging_len--;
+                } else {
+                    vTaskDelay(pdMS_TO_TICKS(10));
+                }
             }
         }
     }
 
     if (mp3d) free(mp3d);
+    if (hAac) AACFreeDecoder(hAac);
     free(staging_buf);
     free(pcm);
+    free(aac_pcm);
     free(stereo_pcm);
     s_decode_task_hdl = NULL;
     vTaskDelete(NULL);

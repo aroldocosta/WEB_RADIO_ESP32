@@ -187,6 +187,53 @@ static esp_err_t api_stations_post_handler(httpd_req_t *req)
     return ESP_FAIL;
 }
 
+/* Handler da API para Gravação em Lote das Rádios Escolhidas (POST /api/stations/batch) */
+static esp_err_t api_stations_batch_post_handler(httpd_req_t *req)
+{
+    int total_len = req->content_len;
+    if (total_len <= 0 || total_len > 8192) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Tamanho de payload invalido");
+        return ESP_FAIL;
+    }
+
+    char *buf = malloc(total_len + 1);
+    if (!buf) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    int received = 0;
+    while (received < total_len) {
+        int ret = httpd_req_recv(req, buf + received, total_len - received);
+        if (ret <= 0) {
+            free(buf);
+            httpd_resp_send_500(req);
+            return ESP_FAIL;
+        }
+        received += ret;
+    }
+    buf[received] = '\0';
+
+    cJSON *json = cJSON_Parse(buf);
+    free(buf);
+
+    if (!json || !cJSON_IsArray(json)) {
+        if (json) cJSON_Delete(json);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Esperado array JSON de radios");
+        return ESP_FAIL;
+    }
+
+    int added = radio_storage_add_batch(json);
+    cJSON_Delete(json);
+
+    char resp[64];
+    snprintf(resp, sizeof(resp), "{\"status\":\"ok\",\"added\":%d}", added);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
 /* Handler da API para Excluir Rádio (DELETE /api/stations?id=X) */
 static esp_err_t api_stations_delete_handler(httpd_req_t *req)
 {
@@ -195,6 +242,22 @@ static esp_err_t api_stations_delete_handler(httpd_req_t *req)
         char id_str[16];
         if (httpd_query_key_value(query, "id", id_str, sizeof(id_str)) == ESP_OK) {
             int id = atoi(id_str);
+
+            /* Proteção UX: Impede exclusão da rádio que está em reprodução ativa */
+            radio_station_t target_st;
+            if (radio_storage_get_by_id(id, &target_st) == ESP_OK) {
+                web_radio_status_t status;
+                if (web_radio_get_status(&status) == ESP_OK) {
+                    if (status.is_playing && strcmp(target_st.url, status.current_url) == 0) {
+                        ESP_LOGW(TAG, "Exclusao bloqueada: radio '%s' esta em reproducao", target_st.name);
+                        httpd_resp_set_status(req, "409 Conflict");
+                        httpd_resp_set_type(req, "application/json");
+                        httpd_resp_send(req, "{\"error\":\"station_playing\",\"message\":\"Radio em reproducao nao pode ser excluida\"}", HTTPD_RESP_USE_STRLEN);
+                        return ESP_OK;
+                    }
+                }
+            }
+
             if (radio_storage_delete(id) == ESP_OK) {
                 httpd_resp_set_type(req, "application/json");
                 httpd_resp_send(req, "{\"status\":\"ok\"}", HTTPD_RESP_USE_STRLEN);
@@ -301,6 +364,7 @@ static esp_err_t api_status_handler(httpd_req_t *req)
     cJSON_AddBoolToObject(root, "playing", status.is_playing);
     cJSON_AddStringToObject(root, "name", status.current_name);
     cJSON_AddStringToObject(root, "url", status.current_url);
+    cJSON_AddStringToObject(root, "codec", status.codec);
     cJSON_AddNumberToObject(root, "hz", status.sample_rate_hz);
     cJSON_AddNumberToObject(root, "bitrate", status.bitrate_kbps);
     cJSON_AddNumberToObject(root, "buffer", status.buffer_bytes);
@@ -389,6 +453,13 @@ esp_err_t web_server_start(void)
         .handler = api_stations_post_handler,
     };
     httpd_register_uri_handler(s_server, &stations_post_uri);
+
+    httpd_uri_t stations_batch_post_uri = {
+        .uri = "/api/stations/batch",
+        .method = HTTP_POST,
+        .handler = api_stations_batch_post_handler,
+    };
+    httpd_register_uri_handler(s_server, &stations_batch_post_uri);
 
     httpd_uri_t stations_del_uri = {
         .uri = "/api/stations",
